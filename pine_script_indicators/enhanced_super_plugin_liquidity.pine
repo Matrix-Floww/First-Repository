@@ -239,6 +239,7 @@ check_l2_method1() =>
     
     // Check upward L1s for L2 formation
     if array.size(upward_l1_prices) > 0 and is_solid and is_bullish
+        // Simplified array removal - collect indices and remove from highest to lowest
         indices_to_remove = array.new<int>()
         l1_bars_to_process = array.new<int>()
         
@@ -266,26 +267,16 @@ check_l2_method1() =>
             track_new_floor(floor_price, bar_index, true, l2_m1_max_upward_l1s, l2_m1_max_downward_l1s)
             l2_m1_floor_up_created := true
             
-            // Remove completed L1s efficiently (high to low index)
+            // Remove completed L1s from highest to lowest index
             for i = array.size(indices_to_remove) - 1 to 0 by 1
                 idx = array.get(indices_to_remove, i)
-                highest_idx = -1
-                for j = 0 to array.size(indices_to_remove) - 1
-                    candidate_idx = array.get(indices_to_remove, j)
-                    if candidate_idx > highest_idx
-                        highest_idx := candidate_idx
-                
-                if highest_idx >= 0 and highest_idx < array.size(upward_l1_prices)
-                    array.remove(upward_l1_prices, highest_idx)
-                    array.remove(upward_l1_bars, highest_idx)
-                    
-                    for k = array.size(indices_to_remove) - 1 to 0 by 1
-                        if array.get(indices_to_remove, k) == highest_idx
-                            array.remove(indices_to_remove, k)
-                            break
+                if idx >= 0 and idx < array.size(upward_l1_prices)
+                    array.remove(upward_l1_prices, idx)
+                    array.remove(upward_l1_bars, idx)
     
     // Check downward L1s for L2 formation
     if array.size(downward_l1_prices) > 0 and is_solid and is_bearish
+        // Simplified array removal - collect indices and remove from highest to lowest
         indices_to_remove = array.new<int>()
         l1_bars_to_process = array.new<int>()
         
@@ -313,23 +304,12 @@ check_l2_method1() =>
             track_new_floor(floor_price, bar_index, false, l2_m1_max_upward_l1s, l2_m1_max_downward_l1s)
             l2_m1_floor_down_created := true
             
-            // Remove completed L1s efficiently (high to low index)
+            // Remove completed L1s from highest to lowest index
             for i = array.size(indices_to_remove) - 1 to 0 by 1
                 idx = array.get(indices_to_remove, i)
-                highest_idx = -1
-                for j = 0 to array.size(indices_to_remove) - 1
-                    candidate_idx = array.get(indices_to_remove, j)
-                    if candidate_idx > highest_idx
-                        highest_idx := candidate_idx
-                
-                if highest_idx >= 0 and highest_idx < array.size(downward_l1_prices)
-                    array.remove(downward_l1_prices, highest_idx)
-                    array.remove(downward_l1_bars, highest_idx)
-                    
-                    for k = array.size(indices_to_remove) - 1 to 0 by 1
-                        if array.get(indices_to_remove, k) == highest_idx
-                            array.remove(indices_to_remove, k)
-                            break
+                if idx >= 0 and idx < array.size(downward_l1_prices)
+                    array.remove(downward_l1_prices, idx)
+                    array.remove(downward_l1_bars, idx)
     
     [l2_m1_up_detected, l2_m1_down_detected, l2_m1_floor_up_created, l2_m1_floor_down_created, l2_m1_up_floor_price, l2_m1_down_floor_price]
 
@@ -423,6 +403,7 @@ check_floor_break_method1() =>
     
     // Check upward floors for breaks (close < floor_price)
     if array.size(floor_upward_prices) > 0
+        // Simplified array removal - collect indices and remove from highest to lowest
         indices_to_remove = array.new<int>()
         
         for i = 0 to array.size(floor_upward_prices) - 1
@@ -433,26 +414,16 @@ check_floor_break_method1() =>
         if array.size(indices_to_remove) > 0
             fb_m1_up_broken := true
             
-            // Remove broken floors (from highest index to lowest to avoid index shifting)
+            // Remove broken floors from highest to lowest index
             for i = array.size(indices_to_remove) - 1 to 0 by 1
                 idx = array.get(indices_to_remove, i)
-                highest_idx = -1
-                for j = 0 to array.size(indices_to_remove) - 1
-                    candidate_idx = array.get(indices_to_remove, j)
-                    if candidate_idx > highest_idx
-                        highest_idx := candidate_idx
-                
-                if highest_idx >= 0 and highest_idx < array.size(floor_upward_prices)
-                    array.remove(floor_upward_prices, highest_idx)
-                    array.remove(floor_upward_bars, highest_idx)
-                    
-                    for k = array.size(indices_to_remove) - 1 to 0 by 1
-                        if array.get(indices_to_remove, k) == highest_idx
-                            array.remove(indices_to_remove, k)
-                            break
+                if idx >= 0 and idx < array.size(floor_upward_prices)
+                    array.remove(floor_upward_prices, idx)
+                    array.remove(floor_upward_bars, idx)
     
     // Check downward floors for breaks (close > floor_price)
     if array.size(floor_downward_prices) > 0
+        // Simplified array removal - collect indices and remove from highest to lowest
         indices_to_remove = array.new<int>()
         
         for i = 0 to array.size(floor_downward_prices) - 1
@@ -463,23 +434,12 @@ check_floor_break_method1() =>
         if array.size(indices_to_remove) > 0
             fb_m1_down_broken := true
             
-            // Remove broken floors (from highest index to lowest to avoid index shifting)
+            // Remove broken floors from highest to lowest index
             for i = array.size(indices_to_remove) - 1 to 0 by 1
                 idx = array.get(indices_to_remove, i)
-                highest_idx = -1
-                for j = 0 to array.size(indices_to_remove) - 1
-                    candidate_idx = array.get(indices_to_remove, j)
-                    if candidate_idx > highest_idx
-                        highest_idx := candidate_idx
-                
-                if highest_idx >= 0 and highest_idx < array.size(floor_downward_prices)
-                    array.remove(floor_downward_prices, highest_idx)
-                    array.remove(floor_downward_bars, highest_idx)
-                    
-                    for k = array.size(indices_to_remove) - 1 to 0 by 1
-                        if array.get(indices_to_remove, k) == highest_idx
-                            array.remove(indices_to_remove, k)
-                            break
+                if idx >= 0 and idx < array.size(floor_downward_prices)
+                    array.remove(floor_downward_prices, idx)
+                    array.remove(floor_downward_bars, idx)
     
     [fb_m1_up_broken, fb_m1_down_broken]
 
@@ -650,7 +610,7 @@ if normalized_vol[rightBars] > filter
             distance = dynamic ? (normalized_vol[rightBars] * aTR[rightBars])/2 : aTR
             color = color.from_gradient(color_intense[rightBars], 0, 100, color.new(lower_col, 80), color.new(lower_col, 0))
             boxes.push(box.new(left = bar_index - rightBars, top = low[rightBars] - distance, right = bar_index - rightBars + 8, bottom = low[rightBars], border_width = 2, border_color = color, bgcolor = color, text = "Volume:\\n" + str.tostring(math.round(avg_vol[rightBars], 2)), text_color = chart.fg_color, text_size = size.small))
-            lines.push(line.new(x1 = bar_index - rightBars, y1 = low[rightBars]- distance, x2 = bar_index, y2 = low[rightBars]- distance, color = color, width = 2))
+            lines.push(line.new(x1 = bar_index - rightBars, y1 = low[rightBars] - distance, x2 = bar_index, y2 = low[rightBars] - distance, color = color, width = 2))
             line_types.push(-1)
 
 // Process liquidity zones and capture L1 formation events with direction
@@ -707,8 +667,7 @@ bool is_solid = enable_coloring and candle_range > 0 and (candle_body / candle_r
 bool is_bullish = close >= open
 bool is_bearish = close < open
 
-color final_color = is_solid and is_bullish ? bullish_color :
-                   is_solid and is_bearish ? bearish_color : na
+color final_color = is_solid and is_bullish ? bullish_color : is_solid and is_bearish ? bearish_color : na
 barcolor(final_color)
 
 // Debug Mode Visualization - Alert markers for development and backtesting
