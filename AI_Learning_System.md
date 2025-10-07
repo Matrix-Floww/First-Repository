@@ -66,7 +66,22 @@
 ---
 
 ### 📈 **Pine Script v5**
-*No Pine Script-specific entries yet. Add entries as mistakes/learnings occur.*
+
+### Learning Entry #004 - 2025-10-07 - PINE SCRIPT V5
+**Error/Issue**: Successfully converted complex liquidity zones indicator from scattered architecture to Enhanced Super-Plugin format
+**Context**: Pine Script v5 indicator with multiple detection methods (L2, Floor Break) requiring modular restructuring
+**Root Cause**: Original code had mixed settings, scattered functions, and no clear plugin boundaries making future additions complex
+**Solution**: Implemented 7-section Enhanced Super-Plugin Architecture: (1) Global Settings, (2) Shared Data Structures, (3) Shared Utility Functions, (4) Method Plugin Blocks, (5) Alert System Dispatcher, (6) Main Execution & Visualization, (7) Dashboard System
+**Rule/Principle**: For complex Pine Script indicators with multiple detection methods, use Enhanced Super-Plugin Architecture with consistent naming patterns (type_m[number]_descriptor), clear START/END plugin markers, and self-contained plugin blocks that require zero manual integration
+**Tags**: pine-script-architecture, plugin-system, modular-design, naming-conventions, array-management, l2-detection, floor-breaks
+
+### Learning Entry #005 - 2025-10-07 - PINE SCRIPT V5
+**Error/Issue**: Line 187 syntax error "end of line without line continuation" - Complex nested array removal loops caused compilation failure in Enhanced Super-Plugin Architecture
+**Context**: Pine Script v5 Enhanced Super-Plugin Architecture - array management in L2 and Floor Break detection methods during first compilation attempt
+**Root Cause**: Used overly complex nested loops with multiple array operations and complex variable finding logic that exceeded Pine Script's syntax parsing limits for single expressions
+**Solution**: Simplified array removal logic - collect indices first in simple loop, then remove from highest to lowest index in separate straightforward loop without complex nested variable searching or multiple array operations in single expression
+**Rule/Principle**: For Pine Script array management, use simple, direct operations in separate steps. Avoid complex nested loops within single functions. When removing multiple array elements, always remove from highest index to lowest to prevent index shifting issues. Keep each array operation simple and readable - one operation per line.
+**Tags**: pine-script-syntax, array-management, compilation-errors, nested-loops, index-removal, line-187-error
 
 **Pine Script Best Practices**:
 - Always specify version with `//@version=5`
@@ -74,6 +89,13 @@
 - Comment complex mathematical calculations
 - Test strategies thoroughly before deployment
 - Structure code with clear input parameters section
+- **NEW**: Use Enhanced Super-Plugin Architecture for multi-method indicators
+- **NEW**: Follow `[type]_m[number]_[descriptor]` naming convention for plugin variables
+- **NEW**: Implement proper array management with high-to-low index removal to prevent shifting issues
+- **NEW**: Create self-contained plugin blocks with START/END markers for zero-integration additions
+- **CRITICAL**: Keep array operations simple and direct - avoid complex nested loops that can cause "end of line without line continuation" syntax errors
+- **CRITICAL**: When removing multiple array elements, collect indices first in simple loop, then remove in separate simple loop from highest to lowest index
+- **CRITICAL**: One array operation per line to prevent syntax parsing issues
 
 ---
 
@@ -209,7 +231,7 @@ Track improvement through:
 
 ---
 
-**Last Updated**: 2025-10-06  
-**Total Learning Entries**: 3 (Universal)  
+**Last Updated**: 2025-10-07  
+**Total Learning Entries**: 5 (3 Universal, 2 Pine Script)  
 **Language Sections**: Python, Pine Script v5, JavaScript  
-**Next Entry ID**: #004
+**Next Entry ID**: #006
