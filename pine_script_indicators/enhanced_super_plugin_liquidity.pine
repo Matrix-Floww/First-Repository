@@ -1,0 +1,804 @@
+//@version=5
+indicator("(my)Liquidity Zones with Enhanced Super-Plugin Architecture [BigBeluga]", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SECTION 1: GLOBAL SETTINGS (Shared by All Methods) ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// 📊 Liquidity Zone Settings
+int leftBars = input.int(10, "Length", group = "📊 Liquidity Zone Settings")
+int rightBars = leftBars - 2
+int qty_pivots = input.int(10, "Zones Amount", minval = 1, maxval = 50, group = "📊 Liquidity Zone Settings")
+int qty_circles = input.int(200, "Circles Amount", minval = 1, maxval = 500, tooltip = "Controls the maximum number of 'Claim Liquidity' circles shown.", group = "📊 Liquidity Zone Settings")
+string flt = input.string("Mid", "Volume Strength Filter", options = ["Low", "Mid", "High"], tooltip = "Filtering Pivots By Volume Strength", group = "📊 Liquidity Zone Settings")
+bool dynamic = input.bool(false, "Dynamic Distance", group = "📊 Liquidity Zone Settings", tooltip = "Dynamic Distance from Pivots based on Volume Strength")
+bool hidePivot = input.bool(true, "Show Filtered Pivots", group = "📊 Liquidity Zone Settings")
+
+// 🎨 Visual Settings (Global Colors - Can be overridden by methods)
+color upper_col = input.color(#2370a3, "Upper Zone", group = "🎨 Visual Settings", inline = "zones")
+color lower_col = input.color(#23a372, "Lower Zone", group = "🎨 Visual Settings", inline = "zones")
+color bullish_circle_col = input.color(color.new(color.green, 0), "Bullish Circle", group="🎨 Visual Settings", inline = "circles")
+color bearish_circle_col = input.color(color.new(#df1c1c, 0), "Bearish Circle", group="🎨 Visual Settings", inline = "circles")
+
+// 🕯️ Candle Coloring Settings (Solid Candle Definition)
+bool enable_coloring = input.bool(true, "Enable Bar Coloring", group = "🕯️ Candle Coloring Settings", inline = "enable")
+int solid_pct = input.int(85, "Solid Percentage %", minval=1, maxval=100, group = "🕯️ Candle Coloring Settings", tooltip="Minimum body-to-range ratio for solid candle classification")
+color bullish_color = input.color(color.new(#23a372, 50), "Bullish Color", group = "🕯️ Candle Coloring Settings", inline = "colors")
+color bearish_color = input.color(color.new(#df1c1c, 50), "Bearish Color", group = "🕯️ Candle Coloring Settings", inline = "colors")
+
+// 🚨 Alert System Configuration
+string alert1_trigger = input.string("Off", "Alert 1 Trigger", options=["Off", "L1 Formation Method 1", "L2 Detection Method 1", "Floor Break Method 1"], group="🚨 Alert System Settings", tooltip="Select detection method for Alert 1")
+string alert2_trigger = input.string("Off", "Alert 2 Trigger", options=["Off", "L1 Formation Method 1", "L2 Detection Method 1", "Floor Break Method 1"], group="🚨 Alert System Settings", tooltip="Select detection method for Alert 2")
+string alert3_trigger = input.string("Off", "Alert 3 Trigger", options=["Off", "L1 Formation Method 1", "L2 Detection Method 1", "Floor Break Method 1"], group="🚨 Alert System Settings", tooltip="Select detection method for Alert 3")
+string alert_frequency = input.string("Once Per Bar", "Alert Frequency", options=["Once Per Bar", "All Triggers"], group="🚨 Alert System Settings", tooltip="How often alerts fire: Once Per Bar (recommended) or All Triggers")
+string alert_timezone = input.string("Auto-Detect from Chart", "Alert Timezone", options=["Auto-Detect from Chart", "Asia/Kolkata (IST)", "America/New_York (EST)", "Europe/London (GMT)", "Asia/Tokyo (JST)"], group="🚨 Alert System Settings", tooltip="Timezone for alert timestamps - Auto-detect uses chart timezone")
+bool alert_debug_mode = input.bool(false, "Enable Alert Debug Mode", group="🚨 Alert System Settings", tooltip="Show debug markers when alerts fire - Pine Logs always enabled for backtesting")
+
+// 📊 Dashboard Display Toggles
+bool show_main_dashboard = input.bool(true, "Show Main Liquidity Tracker", group="📊 Dashboard Display Settings", tooltip="Toggle visibility of the main liquidity tracking dashboard (bottom-left)")
+bool show_alerts_table = input.bool(true, "Show Active Alerts Table", group="📊 Dashboard Display Settings", tooltip="Toggle visibility of the active alerts status table (top-right)")
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SECTION 2: SHARED DATA STRUCTURES (Used by All Methods) ══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Liquidity Zone Arrays
+var line[] lines = array.new<line>()
+var box[] boxes = array.new<box>()
+var label[] circles = array.new<label>()
+var int[] line_types = array.new_int()
+
+// L1 Tracking Arrays (Shared by all L2 methods)
+var float[] upward_l1_prices = array.new<float>()
+var int[] upward_l1_bars = array.new<int>()
+var float[] downward_l1_prices = array.new<float>()
+var int[] downward_l1_bars = array.new<int>()
+
+// Floor Tracking Arrays (Shared by all Floor Break methods)
+var float[] floor_upward_prices = array.new<float>()
+var int[] floor_upward_bars = array.new<int>()
+var float[] floor_downward_prices = array.new<float>()
+var int[] floor_downward_bars = array.new<int>()
+
+// Global Counters
+var int total_floor_breaks = 0
+var int total_alerts_fired = 0
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SECTION 3: SHARED UTILITY FUNCTIONS (Available to All Plugins) ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Efficiently track new L1 liquidity points with array size management
+track_new_l1(price_level, bar_idx, is_upward, max_upward, max_downward) =>
+    if is_upward
+        array.push(upward_l1_prices, price_level)
+        array.push(upward_l1_bars, bar_idx)
+        while array.size(upward_l1_prices) > max_upward
+            array.shift(upward_l1_prices)
+            array.shift(upward_l1_bars)
+    else
+        array.push(downward_l1_prices, price_level)
+        array.push(downward_l1_bars, bar_idx)
+        while array.size(downward_l1_prices) > max_downward
+            array.shift(downward_l1_prices)
+            array.shift(downward_l1_bars)
+
+// Efficiently track new floor levels with automatic cleanup
+track_new_floor(price_level, bar_idx, is_upward, max_upward, max_downward) =>
+    if is_upward
+        array.push(floor_upward_prices, price_level)
+        array.push(floor_upward_bars, bar_idx)
+        while array.size(floor_upward_prices) > max_upward
+            array.shift(floor_upward_prices)
+            array.shift(floor_upward_bars)
+    else
+        array.push(floor_downward_prices, price_level)
+        array.push(floor_downward_bars, bar_idx)  
+        while array.size(floor_downward_prices) > max_downward
+            array.shift(floor_downward_prices)
+            array.shift(floor_downward_bars)
+
+// Convert shape strings to Pine Script constants for plotting
+get_shape_constant(shape_string, is_upward) =>
+    switch shape_string
+        "Triangle Up" => is_upward ? shape.triangleup : shape.triangledown
+        "Triangle Down" => is_upward ? shape.triangledown : shape.triangleup
+        "Circle" => shape.circle
+        "Diamond" => shape.diamond
+        "Square" => shape.square
+        "Cross" => shape.xcross
+        => shape.triangleup
+
+// Get timezone string for alert timestamps with automatic detection
+get_alert_timezone() =>
+    switch alert_timezone
+        "Auto-Detect from Chart" => syminfo.timezone
+        "Asia/Kolkata (IST)" => "Asia/Kolkata"
+        "America/New_York (EST)" => "America/New_York"
+        "Europe/London (GMT)" => "Europe/London"
+        "Asia/Tokyo (JST)" => "Asia/Tokyo"
+        => "Asia/Kolkata"  // Default to IST if unknown
+
+// Get display names for alerts table (shortened for space efficiency)
+get_alert_short_name(trigger_type) =>
+    switch trigger_type
+        "L1 Formation Method 1" => "L1 Formation"
+        "L2 Detection Method 1" => "L2 Detection"
+        "Floor Break Method 1" => "Floor Break"
+        => "Unknown"
+
+// Process liquidity zone line extensions and detect L1 formations with direction
+extend_line(lineArray, boxes, circleArray, typesArray) =>
+    var l1_formation_occurred = false
+    var l1_is_bullish = true
+    l1_formation_occurred := false
+    l1_is_bullish := true
+    
+    if lineArray.size() > 0
+        for i = lineArray.size() - 1 to 0 by 1
+            line_i = array.get(lineArray, i)
+            if na(line_i)
+                continue
+
+            x2 = line.get_x2(line_i)
+            yValue = line.get_y1(line_i)
+
+            if bar_index == x2 and not(high > yValue and low < yValue)
+                line.set_x2(line_i, bar_index + 1)
+
+            if (high > yValue and low < yValue)
+                line.set_style(line_i, line.style_dashed)
+                line.set_width(line_i, 1)
+
+                if boxes.size() > i
+                    box_i = array.get(boxes, i)
+                    box.set_text(box_i, "Liquidity\\nGrabbed")
+                    box.set_border_width(box_i, 1)
+                    box.set_bgcolor(box_i, na)
+
+                line_type = array.get(typesArray, i)
+                circle_color = line_type == 1 ? bullish_circle_col : bearish_circle_col
+
+                new_circle = label.new(bar_index, yValue, "〇", color = color(na), style = label.style_label_center, textcolor = circle_color, tooltip = "Claim Liquidity Point")
+                circleArray.push(new_circle)
+                
+                is_upward = line_type == -1
+                
+                // Set L1 formation flag and direction for alert system
+                l1_formation_occurred := true
+                l1_is_bullish := is_upward  // Downward zone breached = bullish
+                
+                lineArray.set(i, line(na))
+    
+    // Return L1 formation status and direction for alert system
+    [l1_formation_occurred, l1_is_bullish]
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SECTION 4: METHOD PLUGIN BLOCKS (Self-contained Detection Methods) ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════
+// L2 METHOD 1 PLUGIN (Solid Candle Detection)
+// ═══════════════════════════════════════════════════════════════════════
+
+// ===== L2 METHOD 1 PLUGIN START =====
+
+// ─── Method Settings ───
+l2_m1_enabled = input.bool(true, "Enable L2 Method 1 Detection", 
+    group="🔧 L2 Method 1 (Solid Candle)", 
+    tooltip="Enable/disable L2 detection using solid candle breakthrough method")
+
+l2_m1_up_shape = input.string("Triangle Up", "L2 M1 Upward Shape", 
+    options=["Triangle Up", "Circle", "Diamond", "Square"], 
+    group="🔧 L2 Method 1 (Solid Candle)")
+
+l2_m1_down_shape = input.string("Triangle Down", "L2 M1 Downward Shape", 
+    options=["Triangle Down", "Circle", "Diamond", "Square"], 
+    group="🔧 L2 Method 1 (Solid Candle)")
+
+l2_m1_upward_col = input.color(color.new(color.green, 0), "L2 M1 Upward Color", 
+    group="🔧 L2 Method 1 (Solid Candle)")
+
+l2_m1_downward_col = input.color(color.new(color.red, 0), "L2 M1 Downward Color", 
+    group="🔧 L2 Method 1 (Solid Candle)")
+
+l2_m1_max_upward_l1s = input.int(3, "L2 M1 Max Upward L1s to Track", 
+    minval=1, maxval=10, 
+    tooltip="Maximum number of unfinished upward L1s to track simultaneously", 
+    group="🔧 L2 Method 1 (Solid Candle)")
+
+l2_m1_max_downward_l1s = input.int(3, "L2 M1 Max Downward L1s to Track", 
+    minval=1, maxval=10, 
+    tooltip="Maximum number of unfinished downward L1s to track simultaneously", 
+    group="🔧 L2 Method 1 (Solid Candle)")
+
+// ─── Method Local Data ───
+var int l2_m1_count = 0
+
+// ─── Method Detection Function ───
+check_l2_method1() =>
+    var l2_m1_up_detected = false
+    var l2_m1_down_detected = false
+    var l2_m1_floor_up_created = false
+    var l2_m1_floor_down_created = false
+    var float l2_m1_up_floor_price = na
+    var float l2_m1_down_floor_price = na
+    
+    l2_m1_up_detected := false
+    l2_m1_down_detected := false
+    l2_m1_floor_up_created := false
+    l2_m1_floor_down_created := false
+    l2_m1_up_floor_price := na
+    l2_m1_down_floor_price := na
+    
+    candle_range = high - low
+    candle_body = math.abs(open - close)
+    is_solid = enable_coloring and candle_range > 0 and (candle_body / candle_range * 100 >= solid_pct)
+    is_bullish = close >= open
+    is_bearish = close < open
+    
+    // Check upward L1s for L2 formation
+    if array.size(upward_l1_prices) > 0 and is_solid and is_bullish
+        indices_to_remove = array.new<int>()
+        l1_bars_to_process = array.new<int>()
+        
+        for i = 0 to array.size(upward_l1_prices) - 1
+            l1_price = array.get(upward_l1_prices, i)
+            if close > l1_price
+                array.push(indices_to_remove, i)
+                array.push(l1_bars_to_process, array.get(upward_l1_bars, i))
+        
+        if array.size(indices_to_remove) > 0
+            l2_m1_up_detected := true
+            
+            // Calculate floor (minimum price between L1 and L2)
+            l1_bar_idx = array.get(l1_bars_to_process, 0)
+            floor_price = low[bar_index - l1_bar_idx]
+            
+            bars_back = bar_index - l1_bar_idx
+            for j = 0 to bars_back
+                if j <= bars_back
+                    current_low = low[j]
+                    if current_low < floor_price
+                        floor_price := current_low
+            
+            l2_m1_up_floor_price := floor_price
+            track_new_floor(floor_price, bar_index, true, l2_m1_max_upward_l1s, l2_m1_max_downward_l1s)
+            l2_m1_floor_up_created := true
+            
+            // Remove completed L1s efficiently (high to low index)
+            for i = array.size(indices_to_remove) - 1 to 0 by 1
+                idx = array.get(indices_to_remove, i)
+                highest_idx = -1
+                for j = 0 to array.size(indices_to_remove) - 1
+                    candidate_idx = array.get(indices_to_remove, j)
+                    if candidate_idx > highest_idx
+                        highest_idx := candidate_idx
+                
+                if highest_idx >= 0 and highest_idx < array.size(upward_l1_prices)
+                    array.remove(upward_l1_prices, highest_idx)
+                    array.remove(upward_l1_bars, highest_idx)
+                    
+                    for k = array.size(indices_to_remove) - 1 to 0 by 1
+                        if array.get(indices_to_remove, k) == highest_idx
+                            array.remove(indices_to_remove, k)
+                            break
+    
+    // Check downward L1s for L2 formation
+    if array.size(downward_l1_prices) > 0 and is_solid and is_bearish
+        indices_to_remove = array.new<int>()
+        l1_bars_to_process = array.new<int>()
+        
+        for i = 0 to array.size(downward_l1_prices) - 1
+            l1_price = array.get(downward_l1_prices, i)
+            if close < l1_price
+                array.push(indices_to_remove, i)
+                array.push(l1_bars_to_process, array.get(downward_l1_bars, i))
+        
+        if array.size(indices_to_remove) > 0
+            l2_m1_down_detected := true
+            
+            // Calculate floor (maximum price between L1 and L2)
+            l1_bar_idx = array.get(l1_bars_to_process, 0)
+            floor_price = high[bar_index - l1_bar_idx]
+            
+            bars_back = bar_index - l1_bar_idx
+            for j = 0 to bars_back
+                if j <= bars_back
+                    current_high = high[j]
+                    if current_high > floor_price
+                        floor_price := current_high
+            
+            l2_m1_down_floor_price := floor_price
+            track_new_floor(floor_price, bar_index, false, l2_m1_max_upward_l1s, l2_m1_max_downward_l1s)
+            l2_m1_floor_down_created := true
+            
+            // Remove completed L1s efficiently (high to low index)
+            for i = array.size(indices_to_remove) - 1 to 0 by 1
+                idx = array.get(indices_to_remove, i)
+                highest_idx = -1
+                for j = 0 to array.size(indices_to_remove) - 1
+                    candidate_idx = array.get(indices_to_remove, j)
+                    if candidate_idx > highest_idx
+                        highest_idx := candidate_idx
+                
+                if highest_idx >= 0 and highest_idx < array.size(downward_l1_prices)
+                    array.remove(downward_l1_prices, highest_idx)
+                    array.remove(downward_l1_bars, highest_idx)
+                    
+                    for k = array.size(indices_to_remove) - 1 to 0 by 1
+                        if array.get(indices_to_remove, k) == highest_idx
+                            array.remove(indices_to_remove, k)
+                            break
+    
+    [l2_m1_up_detected, l2_m1_down_detected, l2_m1_floor_up_created, l2_m1_floor_down_created, l2_m1_up_floor_price, l2_m1_down_floor_price]
+
+// ─── Method Execution ───
+[l2_m1_up_detected, l2_m1_down_detected, l2_m1_floor_up_created, l2_m1_floor_down_created, l2_m1_up_floor_price, l2_m1_down_floor_price] = 
+    l2_m1_enabled ? check_l2_method1() : [false, false, false, false, na, na]
+
+// ─── Update Counters ───
+if (l2_m1_up_detected or l2_m1_down_detected) and l2_m1_enabled
+    l2_m1_count += 1
+
+// ─── Method Visualization ───
+l2_m1_up_shape_const = get_shape_constant(l2_m1_up_shape, true)
+l2_m1_down_shape_const = get_shape_constant(l2_m1_down_shape, false)
+
+plotshape(l2_m1_up_detected and l2_m1_enabled, 
+    "L2 M1 Up", 
+    l2_m1_up_shape_const, 
+    location.abovebar, 
+    l2_m1_upward_col, 
+    size=size.tiny, 
+    text="L2↑")
+
+plotshape(l2_m1_down_detected and l2_m1_enabled, 
+    "L2 M1 Down", 
+    l2_m1_down_shape_const, 
+    location.belowbar, 
+    l2_m1_downward_col, 
+    size=size.tiny, 
+    text="L2↓")
+
+// ─── Floor Creation Visualization ───
+if l2_m1_floor_up_created and not na(l2_m1_up_floor_price) and l2_m1_enabled
+    label.new(bar_index, l2_m1_up_floor_price, "■", color = color(na), style = label.style_label_center, textcolor = color.blue, size = size.small, tooltip = "Floor Created (Up) - L2 M1")
+
+if l2_m1_floor_down_created and not na(l2_m1_down_floor_price) and l2_m1_enabled
+    label.new(bar_index, l2_m1_down_floor_price, "■", color = color(na), style = label.style_label_center, textcolor = color.blue, size = size.small, tooltip = "Floor Created (Down) - L2 M1")
+
+// ===== L2 METHOD 1 PLUGIN END =====
+
+// ═══════════════════════════════════════════════════════════════════════
+// FLOOR BREAK METHOD 1 PLUGIN (Basic Floor Break Detection)
+// ═══════════════════════════════════════════════════════════════════════
+
+// ===== FLOOR BREAK METHOD 1 PLUGIN START =====
+
+// ─── Method Settings ───
+fb_m1_enabled = input.bool(true, "Enable Floor Break Method 1 Detection", 
+    group="🏢 Floor Break Method 1 (Basic)", 
+    tooltip="Enable/disable basic floor break detection method")
+
+fb_m1_up_shape = input.string("Cross", "FB M1 Upward Shape", 
+    options=["Cross", "Circle", "Diamond", "Square", "Triangle Up"], 
+    group="🏢 Floor Break Method 1 (Basic)")
+
+fb_m1_down_shape = input.string("Cross", "FB M1 Downward Shape", 
+    options=["Cross", "Circle", "Diamond", "Square", "Triangle Down"], 
+    group="🏢 Floor Break Method 1 (Basic)")
+
+fb_m1_size = input.string("Normal", "FB M1 Shape Size", 
+    options=["Tiny", "Small", "Normal", "Large"], 
+    group="🏢 Floor Break Method 1 (Basic)", 
+    tooltip="Size of floor break shapes on chart")
+
+fb_m1_upward_col = input.color(color.new(color.orange, 0), "FB M1 Upward Color", 
+    group="🏢 Floor Break Method 1 (Basic)")
+
+fb_m1_downward_col = input.color(color.new(color.purple, 0), "FB M1 Downward Color", 
+    group="🏢 Floor Break Method 1 (Basic)")
+
+fb_m1_max_upward_floors = input.int(3, "FB M1 Max Upward Floors to Track", 
+    minval=1, maxval=20, 
+    tooltip="Maximum number of upward floors to track simultaneously", 
+    group="🏢 Floor Break Method 1 (Basic)")
+
+fb_m1_max_downward_floors = input.int(3, "FB M1 Max Downward Floors to Track", 
+    minval=1, maxval=20, 
+    tooltip="Maximum number of downward floors to track simultaneously", 
+    group="🏢 Floor Break Method 1 (Basic)")
+
+// ─── Method Local Data ───
+var int fb_m1_count = 0
+
+// ─── Method Detection Function ───
+check_floor_break_method1() =>
+    var fb_m1_up_broken = false
+    var fb_m1_down_broken = false
+    
+    fb_m1_up_broken := false
+    fb_m1_down_broken := false
+    
+    // Check upward floors for breaks (close < floor_price)
+    if array.size(floor_upward_prices) > 0
+        indices_to_remove = array.new<int>()
+        
+        for i = 0 to array.size(floor_upward_prices) - 1
+            floor_price = array.get(floor_upward_prices, i)
+            if close < floor_price
+                array.push(indices_to_remove, i)
+        
+        if array.size(indices_to_remove) > 0
+            fb_m1_up_broken := true
+            
+            // Remove broken floors (from highest index to lowest to avoid index shifting)
+            for i = array.size(indices_to_remove) - 1 to 0 by 1
+                idx = array.get(indices_to_remove, i)
+                highest_idx = -1
+                for j = 0 to array.size(indices_to_remove) - 1
+                    candidate_idx = array.get(indices_to_remove, j)
+                    if candidate_idx > highest_idx
+                        highest_idx := candidate_idx
+                
+                if highest_idx >= 0 and highest_idx < array.size(floor_upward_prices)
+                    array.remove(floor_upward_prices, highest_idx)
+                    array.remove(floor_upward_bars, highest_idx)
+                    
+                    for k = array.size(indices_to_remove) - 1 to 0 by 1
+                        if array.get(indices_to_remove, k) == highest_idx
+                            array.remove(indices_to_remove, k)
+                            break
+    
+    // Check downward floors for breaks (close > floor_price)
+    if array.size(floor_downward_prices) > 0
+        indices_to_remove = array.new<int>()
+        
+        for i = 0 to array.size(floor_downward_prices) - 1
+            floor_price = array.get(floor_downward_prices, i)
+            if close > floor_price
+                array.push(indices_to_remove, i)
+        
+        if array.size(indices_to_remove) > 0
+            fb_m1_down_broken := true
+            
+            // Remove broken floors (from highest index to lowest to avoid index shifting)
+            for i = array.size(indices_to_remove) - 1 to 0 by 1
+                idx = array.get(indices_to_remove, i)
+                highest_idx = -1
+                for j = 0 to array.size(indices_to_remove) - 1
+                    candidate_idx = array.get(indices_to_remove, j)
+                    if candidate_idx > highest_idx
+                        highest_idx := candidate_idx
+                
+                if highest_idx >= 0 and highest_idx < array.size(floor_downward_prices)
+                    array.remove(floor_downward_prices, highest_idx)
+                    array.remove(floor_downward_bars, highest_idx)
+                    
+                    for k = array.size(indices_to_remove) - 1 to 0 by 1
+                        if array.get(indices_to_remove, k) == highest_idx
+                            array.remove(indices_to_remove, k)
+                            break
+    
+    [fb_m1_up_broken, fb_m1_down_broken]
+
+// ─── Method Execution ───
+[fb_m1_up_broken, fb_m1_down_broken] = 
+    fb_m1_enabled ? check_floor_break_method1() : [false, false]
+
+// ─── Update Counters ───
+if (fb_m1_up_broken or fb_m1_down_broken) and fb_m1_enabled
+    fb_m1_count += 1
+    total_floor_breaks += 1
+
+// ─── Method Visualization ───
+fb_m1_up_shape_const = get_shape_constant(fb_m1_up_shape, true)
+fb_m1_down_shape_const = get_shape_constant(fb_m1_down_shape, false)
+
+// Upward Floor Break - All size options
+plotshape(fb_m1_up_broken and fb_m1_enabled and fb_m1_size == "Tiny", "FB M1 Up - Tiny", fb_m1_up_shape_const, location.belowbar, fb_m1_upward_col, size=size.tiny, text="FB↑")
+plotshape(fb_m1_up_broken and fb_m1_enabled and fb_m1_size == "Small", "FB M1 Up - Small", fb_m1_up_shape_const, location.belowbar, fb_m1_upward_col, size=size.small, text="FB↑")
+plotshape(fb_m1_up_broken and fb_m1_enabled and fb_m1_size == "Normal", "FB M1 Up - Normal", fb_m1_up_shape_const, location.belowbar, fb_m1_upward_col, size=size.normal, text="FB↑")
+plotshape(fb_m1_up_broken and fb_m1_enabled and fb_m1_size == "Large", "FB M1 Up - Large", fb_m1_up_shape_const, location.belowbar, fb_m1_upward_col, size=size.large, text="FB↑")
+
+// Downward Floor Break - All size options
+plotshape(fb_m1_down_broken and fb_m1_enabled and fb_m1_size == "Tiny", "FB M1 Down - Tiny", fb_m1_down_shape_const, location.abovebar, fb_m1_downward_col, size=size.tiny, text="FB↓")
+plotshape(fb_m1_down_broken and fb_m1_enabled and fb_m1_size == "Small", "FB M1 Down - Small", fb_m1_down_shape_const, location.abovebar, fb_m1_downward_col, size=size.small, text="FB↓")
+plotshape(fb_m1_down_broken and fb_m1_enabled and fb_m1_size == "Normal", "FB M1 Down - Normal", fb_m1_down_shape_const, location.abovebar, fb_m1_downward_col, size=size.normal, text="FB↓")
+plotshape(fb_m1_down_broken and fb_m1_enabled and fb_m1_size == "Large", "FB M1 Down - Large", fb_m1_down_shape_const, location.abovebar, fb_m1_downward_col, size=size.large, text="FB↓")
+
+// ===== FLOOR BREAK METHOD 1 PLUGIN END =====
+
+// ═══════════════════════════════════════════════════════════════════════
+// FUTURE PLUGINS GO HERE - ADD NEW METHODS BELOW THIS LINE
+// ═══════════════════════════════════════════════════════════════════════
+// 
+// Example: L2 METHOD 2 PLUGIN (Custom Logic)
+// Example: FLOOR BREAK METHOD 2 PLUGIN (Advanced Conditions)
+// Example: L1 FORMATION METHOD 1 PLUGIN (Custom L1 Detection)
+//
+// Each new plugin should follow the Enhanced Super-Plugin template:
+// 1. Clear START/END markers with descriptive names
+// 2. Method settings with consistent naming: [type]_m[x]_[descriptor]
+// 3. Local data variables for counters and state
+// 4. Detection function returning standardized results
+// 5. Method execution with enable/disable toggle
+// 6. Counter updates for performance tracking
+// 7. Visualization with customizable options
+// ═══════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SECTION 5: ALERT SYSTEM DISPATCHER (Centralized Alert Handling) ══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Generate directional alert messages with trading context
+get_alert_message(detection_type, current_price, is_bullish) =>
+    timezone_str = get_alert_timezone()
+    time_str = str.format_time(timenow, "HH:mm", timezone_str)
+    date_str = str.format_time(timenow, "yyMMdd", timezone_str)
+    price_str = str.tostring(current_price, "#.####")
+    
+    // Directional indicator with arrow
+    direction = is_bullish ? "[BULLISH ↑]" : "[BEARISH ↓]"
+    
+    // Enhanced messages with direction and trading context
+    switch detection_type
+        "L1 Formation Method 1" => 
+            context = is_bullish ? "downward zone breached" : "upward zone breached"
+            time_str + " " + price_str + " L1 liquidity " + context + " " + direction + " " + date_str
+            
+        "L2 Detection Method 1" => 
+            context = is_bullish ? "solid candle closed above L1" : "solid candle closed below L1"
+            time_str + " " + price_str + " L2 " + (is_bullish ? "bullish" : "bearish") + " - " + context + " " + direction + " " + date_str
+            
+        "Floor Break Method 1" => 
+            context = is_bullish ? "upward - potential LONG setup" : "downward - potential SHORT setup"
+            time_str + " " + price_str + " Floor break " + context + " " + direction + " " + date_str
+            
+        => time_str + " " + price_str + " Unknown detection method " + direction + " " + date_str
+
+// Check alert conditions and return firing states with direction
+check_alert_conditions(l1_detected, l1_is_bullish, l2_up_detected, l2_down_detected, floor_up_broken, floor_down_broken) =>
+    // Early exit if no alerts are configured
+    if alert1_trigger == "Off" and alert2_trigger == "Off" and alert3_trigger == "Off"
+        [false, false, false, false, false, false]
+    else
+        var alert1_should_fire = false
+        var alert2_should_fire = false
+        var alert3_should_fire = false
+        var alert1_is_bullish = true
+        var alert2_is_bullish = true
+        var alert3_is_bullish = true
+        
+        // Reset firing flags
+        alert1_should_fire := false
+        alert2_should_fire := false
+        alert3_should_fire := false
+        alert1_is_bullish := true
+        alert2_is_bullish := true
+        alert3_is_bullish := true
+        
+        // Pre-calculate conditions for efficiency
+        l1_condition = l1_detected
+        l2_condition = l2_up_detected or l2_down_detected
+        floor_break_condition = floor_up_broken or floor_down_broken
+        
+        // Alert 1 Logic with direction detection
+        if alert1_trigger != "Off"
+            if alert1_trigger == "L1 Formation Method 1" and l1_condition
+                alert1_should_fire := true
+                alert1_is_bullish := l1_is_bullish
+            else if alert1_trigger == "L2 Detection Method 1" and l2_condition
+                alert1_should_fire := true
+                alert1_is_bullish := l2_up_detected  // True if L2 upward, false if downward
+            else if alert1_trigger == "Floor Break Method 1" and floor_break_condition
+                alert1_should_fire := true
+                alert1_is_bullish := floor_up_broken  // True if floor broken upward, false if downward
+        
+        // Alert 2 Logic with direction detection
+        if alert2_trigger != "Off"
+            if alert2_trigger == "L1 Formation Method 1" and l1_condition
+                alert2_should_fire := true
+                alert2_is_bullish := l1_is_bullish
+            else if alert2_trigger == "L2 Detection Method 1" and l2_condition
+                alert2_should_fire := true
+                alert2_is_bullish := l2_up_detected
+            else if alert2_trigger == "Floor Break Method 1" and floor_break_condition
+                alert2_should_fire := true
+                alert2_is_bullish := floor_up_broken
+        
+        // Alert 3 Logic with direction detection
+        if alert3_trigger != "Off"
+            if alert3_trigger == "L1 Formation Method 1" and l1_condition
+                alert3_should_fire := true
+                alert3_is_bullish := l1_is_bullish
+            else if alert3_trigger == "L2 Detection Method 1" and l2_condition
+                alert3_should_fire := true
+                alert3_is_bullish := l2_up_detected
+            else if alert3_trigger == "Floor Break Method 1" and floor_break_condition
+                alert3_should_fire := true
+                alert3_is_bullish := floor_up_broken
+        
+        [alert1_should_fire, alert2_should_fire, alert3_should_fire, alert1_is_bullish, alert2_is_bullish, alert3_is_bullish]
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SECTION 6: MAIN EXECUTION & VISUALIZATION (Core Indicator Logic) ══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Liquidity zone detection with volume-based filtering
+filter = (flt == "Low" ? 1 : flt == "Mid" ? 2 : flt == "High" ? 3 : 0)
+series float ph = ta.pivothigh(leftBars, rightBars)
+series float pl = ta.pivotlow(leftBars, rightBars)
+float avg_vol = ta.sma(volume, rightBars)
+float normalized_vol = (avg_vol - 0) / ta.stdev(avg_vol, 500)
+int color_intense = math.round(normalized_vol) * 15
+color_intense := color_intense > 100 ? 100 : color_intense
+float aTR = ta.atr(200)
+
+// Create dynamic liquidity zones based on volume strength
+if normalized_vol[rightBars] > filter
+    switch
+        not na(ph) => 
+            distance = dynamic ? (normalized_vol[rightBars] * aTR[rightBars])/2 : aTR
+            color = color.from_gradient(color_intense[rightBars], 0, 100, color.new(upper_col, 60), color.new(upper_col, 0))
+            boxes.push(box.new(left = bar_index - rightBars, top = high[rightBars] + distance, right = bar_index - rightBars + 8, bottom = high[rightBars], border_width = 2, border_color = color, bgcolor = color, text = "Volume:\\n" + str.tostring(math.round(avg_vol[rightBars], 2)), text_color = chart.fg_color, text_size = size.small))
+            lines.push(line.new(x1 = bar_index - rightBars, y1 = high[rightBars] + distance, x2 = bar_index, y2 = high[rightBars] + distance, color = color, width = 2))
+            line_types.push(1)
+
+        not na(pl) => 
+            distance = dynamic ? (normalized_vol[rightBars] * aTR[rightBars])/2 : aTR
+            color = color.from_gradient(color_intense[rightBars], 0, 100, color.new(lower_col, 80), color.new(lower_col, 0))
+            boxes.push(box.new(left = bar_index - rightBars, top = low[rightBars] - distance, right = bar_index - rightBars + 8, bottom = low[rightBars], border_width = 2, border_color = color, bgcolor = color, text = "Volume:\\n" + str.tostring(math.round(avg_vol[rightBars], 2)), text_color = chart.fg_color, text_size = size.small))
+            lines.push(line.new(x1 = bar_index - rightBars, y1 = low[rightBars]- distance, x2 = bar_index, y2 = low[rightBars]- distance, color = color, width = 2))
+            line_types.push(-1)
+
+// Process liquidity zones and capture L1 formation events with direction
+[l1_formation_detected, l1_is_bullish] = extend_line(lines, boxes, circles, line_types)
+
+// Track L1 formations using shared utility function
+if l1_formation_detected
+    // Use global settings for L1 tracking limits from L2 Method 1
+    track_new_l1(l1_formation_detected ? high : low, bar_index, l1_is_bullish, l2_m1_max_upward_l1s, l2_m1_max_downward_l1s)
+
+// Efficient array size management for performance optimization
+while array.size(lines) > qty_pivots
+    line.delete(array.shift(lines))
+    box.delete(array.shift(boxes))
+    array.shift(line_types)
+
+while array.size(circles) > qty_circles
+    label.delete(array.shift(circles))
+
+// Execute alert condition checking with direction detection
+[alert1_should_fire, alert2_should_fire, alert3_should_fire, alert1_is_bullish, alert2_is_bullish, alert3_is_bullish] = check_alert_conditions(l1_formation_detected, l1_is_bullish, l2_m1_up_detected, l2_m1_down_detected, fb_m1_up_broken, fb_m1_down_broken)
+
+// Get alert frequency setting for proper alert management
+freq_setting = alert_frequency == "Once Per Bar" ? alert.freq_once_per_bar : alert.freq_all
+
+// Fire Alert 1 ONLY on bar close with directional message
+if alert1_should_fire and alert1_trigger != "Off" and barstate.isconfirmed
+    alert_msg = get_alert_message(alert1_trigger, close, alert1_is_bullish)
+    alert("Alert 1: " + alert_msg, freq_setting)
+    // Always log to Pine Logs for backtesting support with direction
+    log.info("Alert 1: " + alert_msg)
+    total_alerts_fired += 1
+
+// Fire Alert 2 ONLY on bar close with directional message
+if alert2_should_fire and alert2_trigger != "Off" and barstate.isconfirmed
+    alert_msg = get_alert_message(alert2_trigger, close, alert2_is_bullish)
+    alert("Alert 2: " + alert_msg, freq_setting)
+    // Always log to Pine Logs for backtesting support with direction
+    log.info("Alert 2: " + alert_msg)
+    total_alerts_fired += 1
+
+// Fire Alert 3 ONLY on bar close with directional message
+if alert3_should_fire and alert3_trigger != "Off" and barstate.isconfirmed
+    alert_msg = get_alert_message(alert3_trigger, close, alert3_is_bullish)
+    alert("Alert 3: " + alert_msg, freq_setting)
+    // Always log to Pine Logs for backtesting support with direction
+    log.info("Alert 3: " + alert_msg)
+    total_alerts_fired += 1
+
+// Optimized solid candle classification for bar coloring
+float candle_range = high - low
+float candle_body = math.abs(open - close)
+bool is_solid = enable_coloring and candle_range > 0 and (candle_body / candle_range * 100 >= solid_pct)
+bool is_bullish = close >= open
+bool is_bearish = close < open
+
+color final_color = is_solid and is_bullish ? bullish_color :
+                   is_solid and is_bearish ? bearish_color : na
+barcolor(final_color)
+
+// Debug Mode Visualization - Alert markers for development and backtesting
+plotshape(alert_debug_mode and alert1_should_fire and alert1_trigger != "Off", "Alert 1 Debug", shape.labelup, location.belowbar, color.new(color.yellow, 0), size=size.tiny, text="A1")
+plotshape(alert_debug_mode and alert2_should_fire and alert2_trigger != "Off", "Alert 2 Debug", shape.labelup, location.belowbar, color.new(color.lime, 0), size=size.tiny, text="A2")
+plotshape(alert_debug_mode and alert3_should_fire and alert3_trigger != "Off", "Alert 3 Debug", shape.labelup, location.belowbar, color.new(color.aqua, 0), size=size.tiny, text="A3")
+
+// Filtered Pivots Visualization for zone analysis
+plotshape(not na(ph) and normalized_vol[rightBars] > filter and hidePivot ? high[rightBars] : na, 
+    "", shape.circle, location.absolute, color.new(upper_col,60), size = size.small, offset = -rightBars)
+plotshape(not na(ph) and normalized_vol[rightBars] > filter and hidePivot ? high[rightBars] : na, 
+    "", shape.circle, location.absolute, upper_col, size = size.tiny, offset = -rightBars)
+plotshape(not na(pl) and normalized_vol[rightBars] > filter and hidePivot ? low[rightBars] : na, 
+    "", shape.circle, location.absolute, color.new(lower_col,60), size = size.small, offset = -rightBars)
+plotshape(not na(pl) and normalized_vol[rightBars] > filter and hidePivot ? low[rightBars] : na, 
+    "", shape.circle, location.absolute, lower_col, size = size.tiny, offset = -rightBars)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SECTION 7: DASHBOARD SYSTEM (Toggleable Professional Interface) ══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Active Alerts Status Table (Top Right) - Toggleable Display
+var alerts_tbl = table.new(position.top_right, 2, 4, frame_color = color.new(color.gray, 70), frame_width = 1, border_color = color.new(color.black, 70), border_width = 1)
+if barstate.islast and show_alerts_table
+    // Count active alerts for dynamic display
+    active_alerts = 0
+    if alert1_trigger != "Off"
+        active_alerts += 1
+    if alert2_trigger != "Off"
+        active_alerts += 1
+    if alert3_trigger != "Off"
+        active_alerts += 1
+
+    if active_alerts > 0
+        // Display active alerts with method identification
+        alerts_tbl.cell(0, 0, "🚨 ACTIVE ALERTS", text_color = chart.fg_color, bgcolor = color.new(color.red, 80), text_size = size.small)
+        alerts_tbl.cell(1, 0, "METHOD", text_color = chart.fg_color, bgcolor = color.new(color.red, 80), text_size = size.small)
+
+        // Dynamic content generation
+        row = 1
+
+        // Alert 1 Status
+        if alert1_trigger != "Off"
+            alerts_tbl.cell(0, row, "Alert 1", text_color = chart.fg_color, text_size = size.small)
+            alerts_tbl.cell(1, row, get_alert_short_name(alert1_trigger), text_color = chart.fg_color, bgcolor = color.new(color.green, 70), text_size = size.small)
+            row += 1
+
+        // Alert 2 Status
+        if alert2_trigger != "Off"
+            alerts_tbl.cell(0, row, "Alert 2", text_color = chart.fg_color, text_size = size.small)
+            alerts_tbl.cell(1, row, get_alert_short_name(alert2_trigger), text_color = chart.fg_color, bgcolor = color.new(color.green, 70), text_size = size.small)
+            row += 1
+
+        // Alert 3 Status
+        if alert3_trigger != "Off"
+            alerts_tbl.cell(0, row, "Alert 3", text_color = chart.fg_color, text_size = size.small)
+            alerts_tbl.cell(1, row, get_alert_short_name(alert3_trigger), text_color = chart.fg_color, bgcolor = color.new(color.green, 70), text_size = size.small)
+            row += 1
+    else
+        // Display no alerts configured message
+        alerts_tbl.cell(0, 0, "🚨 ALERTS", text_color = chart.fg_color, bgcolor = color.new(color.red, 80), text_size = size.small)
+        alerts_tbl.cell(1, 0, "STATUS", text_color = chart.fg_color, bgcolor = color.new(color.red, 80), text_size = size.small)
+        alerts_tbl.cell(0, 1, "No Alerts", text_color = chart.fg_color, text_size = size.small)
+        alerts_tbl.cell(1, 1, "❌ ALL OFF", text_color = chart.fg_color, bgcolor = color.new(color.red, 70), text_size = size.small)
+
+// Main Liquidity Tracker Dashboard (Bottom Left) - Toggleable Display
+var tbl = table.new(position.bottom_left, 2, 6, frame_color = color.new(color.gray, 70), frame_width = 1, border_color = color.new(color.black, 70), border_width = 1)
+if barstate.islast and show_main_dashboard
+    // Header with professional branding
+    tbl.cell(0, 0, "🎯 LIQUIDITY TRACKER", text_color = chart.fg_color, bgcolor = color.new(color.blue, 80), text_size = size.small)
+    tbl.cell(1, 0, "STATUS", text_color = chart.fg_color, bgcolor = color.new(color.blue, 80), text_size = size.small)
+
+    // L2 Detection Status
+    tbl.cell(0, 1, "🔧 L2 Method 1", text_color = chart.fg_color, text_size = size.small)
+    tbl.cell(1, 1, l2_m1_enabled ? "✅ ACTIVE" : "❌ DISABLED", text_color = chart.fg_color, bgcolor = l2_m1_enabled ? color.new(color.green, 70) : color.new(color.red, 70), text_size = size.small)
+
+    // L1 Tracking Performance
+    tbl.cell(0, 2, "📈 L1 Tracking", text_color = chart.fg_color, text_size = size.small)
+    tbl.cell(1, 2, "↑" + str.tostring(array.size(upward_l1_prices)) + "/" + str.tostring(l2_m1_max_upward_l1s) + " ↓" + str.tostring(array.size(downward_l1_prices)) + "/" + str.tostring(l2_m1_max_downward_l1s), text_color = chart.fg_color, bgcolor = color.new(color.blue, 70), text_size = size.small)
+
+    // Floor Tracking Performance
+    tbl.cell(0, 3, "🏢 Floor Tracking", text_color = chart.fg_color, text_size = size.small)
+    tbl.cell(1, 3, "↑" + str.tostring(array.size(floor_upward_prices)) + "/" + str.tostring(fb_m1_max_upward_floors) + " ↓" + str.tostring(array.size(floor_downward_prices)) + "/" + str.tostring(fb_m1_max_downward_floors), text_color = chart.fg_color, bgcolor = color.new(color.orange, 70), text_size = size.small)
+
+    // Floor Break Statistics
+    tbl.cell(0, 4, "💯 Total Breaks", text_color = chart.fg_color, text_size = size.small)
+    tbl.cell(1, 4, fb_m1_enabled ? str.tostring(total_floor_breaks) + " DETECTED" : "❌ DISABLED", text_color = chart.fg_color, bgcolor = fb_m1_enabled ? color.new(color.purple, 70) : color.new(color.red, 70), text_size = size.small)
+    
+    // Alert Performance Statistics
+    tbl.cell(0, 5, "🔔 Alerts Fired", text_color = chart.fg_color, text_size = size.small)
+    alert_status = total_alerts_fired > 0 ? str.tostring(total_alerts_fired) + " FIRED" : "NO ALERTS"
+    alert_bg = total_alerts_fired > 0 ? color.new(color.green, 70) : color.new(color.gray, 70)
+    tbl.cell(1, 5, alert_status, text_color = chart.fg_color, bgcolor = alert_bg, text_size = size.small)
